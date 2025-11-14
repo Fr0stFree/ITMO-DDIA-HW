@@ -17,5 +17,4 @@ scrape_configs:
 
   - job_name: "app"
     static_configs:
-      - targets: ["app:8081/metrics"]
-      - targets: ["app:8082/metrics"]
+      - targets: ["app:8081"]
