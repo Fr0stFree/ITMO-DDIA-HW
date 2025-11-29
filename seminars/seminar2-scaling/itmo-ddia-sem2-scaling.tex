@@ -1,0 +1,606 @@
+\documentclass{beamer}
+\usetheme{Madrid}
+\usepackage{minted}
+% sudo tlmgr install minted
+\usepackage[utf8]{inputenc}
+\usepackage[T2A]{fontenc}
+\usepackage[russian,english]{babel}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, positioning}
+
+% Footline: show current section (left) and frame numbers (right)
+\setbeamertemplate{footline}{%
+  \leavevmode%
+  \hbox{%
+    \begin{beamercolorbox}[wd=.78\paperwidth,ht=2.5ex,dp=1ex,left]{author in head/foot}%
+      \hspace*{1em}\usebeamerfont{footline}\insertsectionhead%
+    \end{beamercolorbox}%
+    \begin{beamercolorbox}[wd=.22\paperwidth,ht=2.5ex,dp=1ex,right]{date in head/foot}%
+      \usebeamerfont{footline}\insertframenumber{} / \inserttotalframenumber\hspace*{1em}%
+    \end{beamercolorbox}%
+  }%
+}
+
+\newcommand{\parpause}[1]{\only<+->{#1\par}}
+
+\AtBeginSection[]
+{
+  \begin{frame}
+    \frametitle{Содержание}
+    \tableofcontents[currentsection]
+  \end{frame}
+}
+\title{Семинар 2. Масштабирование, балансировка и кэширование}
+\subtitle{Принципы построения высоконагруженных систем}
+\author{Георгий Семенов}
+\institute{Институт прикладных компьютерных наук \\ Университет ИТМО}
+\date{осень 2025}
+
+\begin{document}
+
+\frame{\titlepage}
+
+\section{Управление системой при масштабировании}
+
+\begin{frame}
+  \frametitle{Вспоминаем лекцию}
+  \begin{itemize}
+    \item Масштабирование = вертикальное (железом) и горизонтальное (количеством инстансов сервиса)
+    \item Хотим stateless-сервисы за счет stateful хранилищ
+    \item Все еще хотим observability + автомасштабирование
+    \item Хотим единообразно управлять конфигурациями и состоянием (например, 60 подов x 3 зоны = 180 черных ящиков)
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Облака – белогривые лошадки}
+  \begin{itemize}
+    \item Абстракция в виде <<очередей>>, <<сервисов>>, <<хранилищ>>, <<подов>>
+    \item Есть внешний гипервизор/набор автоматических агентов, обслуживающих инфраструктуру
+    \item Связано с docker registry – сервисы загружают образы из единого хранилища
+    \item Манифесты описывают требуемое железо и количество инстансов
+    \item Умное облако управляет ресурсами и автоматически распределяет их между контейнерами
+    \item Избыточность зон
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Kubernetes — структура}
+  \begin{itemize}
+    \item Control Plane:
+      \begin{itemize}
+        \item \textbf{API Server} — единственная точка входа для команд и автоматов
+        \item \textbf{etcd} — хранилище состояния (истина в последней инстанции)
+        \item \textbf{Scheduler} — решает, куда посадить поды
+        \item \textbf{Controller Manager} — следит за соответствием желаемого и фактического состояния
+      \end{itemize}
+    \item Worker Node:
+      \begin{itemize}
+        \item \textbf{Kubelet} — управляет контейнерами
+        \item \textbf{Kube-proxy} — настройка сетевых правил
+        \item \textbf{Container runtime} (containerd / CRI-O)
+      \end{itemize}
+    \item Можно переиспользовать конфигурации с помощью Helm Charts
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Kubernetes — автомасштабирование}
+  \begin{itemize}
+    \item \textbf{Horizontal Pod Autoscaler (HPA)}
+      \begin{itemize}
+        \item Масштабирует число подов
+        \item Метрики: CPU, RAM, кастомные Prometheus-метрики
+        \item Работает через Metrics Server или адаптеры
+      \end{itemize}
+    \item \textbf{Vertical Pod Autoscaler (VPA)}
+      \begin{itemize}
+        \item Подходит для stateful-сервисов
+      \end{itemize}
+    \item \textbf{Cluster Autoscaler (CA)}
+      \begin{itemize}
+        \item Добавляет или удаляет ноды в кластере
+        \item Работает с облаками: GCP, AWS, Yandex Cloud
+      \end{itemize}
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Флаппинг как фактор эксплуатации}
+  \begin{itemize}
+    \item Мгновенные статистики могут <<скакать>> на небольших интервалах времени
+    \item Ложные срабатывания \textit{алертов} и лишние \textit{операции масштабирования}
+    \item Неразрешимый вопрос – <<как отличить флап от реальной проблемы?>>
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Интеграции сервисов управления конфигурацией}
+
+  \begin{table}[h!]
+    \centering
+    \begin{tabular}{|l|p{9.5cm}|}
+      \hline
+      \textbf{Tool} & \textbf{Notable Integrations} \\ \hline
+      Consul & Terraform, Vault, Nomad, Kubernetes \\ \hline
+      etcd & Kubernetes, CoreDNS, Vitess, Rook, Prometheus \\ \hline
+      ZooKeeper & Kafka, Hadoop, HBase, Solr, Druid, Apache Curator \\ \hline
+    \end{tabular}
+  \end{table}
+
+\end{frame}
+
+\begin{frame}
+  \frametitle{Типичные паттерны управления}
+  \begin{itemize}
+    \item Leader election (выбор лидера)
+    \item Distributed locks (распределённые блокировки - ZooKeeper)
+    \item Coordination (координация действий – Raft, Zab)
+    \item Service discovery
+    \item Observe / Watch / Notify
+    \item Dynamic configuration (горячая замена)
+  \end{itemize}
+\end{frame}
+
+\section{Балансировка нагрузки}
+
+\begin{frame}
+  \frametitle{Зачем нужна балансировка нагрузки?}
+  \begin{itemize}
+    \item Равномерное распределение запросов между серверами
+    \item Устранение single point of failure
+    \item Поддержка горизонтального масштабирования (нужен service discovery)
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{L4 балансировка}
+  \begin{itemize}
+    \item Работает на уровне транспортного протокола (TCP/UDP)
+    \item Быстрая, не анализирует HTTP или полезную нагрузку
+    \item Идеальна для gRPC, баз данных, бинарных протоколов
+    \item Методы:
+    \begin{itemize}
+      \item Round Robin
+      \item Least Connections
+      \item Source IP Hash
+    \end{itemize}
+    \item Примеры: LVS, HAProxy (L4), AWS NLB, Google GLB
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{L7 балансировка}
+  \begin{itemize}
+    \item Работает на уровне HTTP/HTTPS/HTTP2/gRPC
+    \item Понимает URL, cookie, headers, методы
+    \item Позволяет делать content-based routing:
+    \begin{itemize}
+      \item по пути URL (/api, /static)
+      \item по домену (example.com)
+      \item по пользовательскому агенту
+      \item по версии API
+    \end{itemize}
+    \item Поддерживает TLS termination
+    \item Примеры: Nginx, Envoy, Traefik, AWS ALB, GCP HTTPS LB
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{DNS балансировка}
+  \begin{itemize}
+    \item Самый простой способ распределить трафик
+    \item Один домен → несколько IP-адресов
+    \item Распределение зависит от DNS resolver'а
+    \item Ограничения:
+    \begin{itemize}
+      \item нет быстрого failover — зависит от TTL
+      \item нет health checks
+      \item нет учёта нагрузки
+    \end{itemize}
+    \item Используется для глобальной балансировки (GSLB)
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Anycast балансировка}
+  \begin{itemize}
+    \item Несколько дата-центров объявляют один и тот же IP
+    \item BGP направляет пользователя к ближайшей по сети точке
+    \item Используется крупными CDN и DNS-провайдерами
+    \item Преимущества:
+    \begin{itemize}
+      \item низкая задержка (пользователь → ближайший POP)
+      \item автоматический failover на уровне маршрутизации
+    \end{itemize}
+    \item Примеры: Cloudflare, Google DNS 8.8.8.8, AWS Global Accelerator
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Client-side балансировка}
+  \begin{itemize}
+    \item Клиент (или SDK) сам выбирает сервер для запроса
+    \item Часто используется в сервисах с сервис-мешем
+    \item Требует списка доступных узлов (через Consul/Eureka)
+    \item Примеры:
+    \begin{itemize}
+      \item gRPC internal load balancing
+      \item Service Mesh (Envoy Sidecar)
+      \item Netflix Ribbon / Spring Cloud
+    \end{itemize}
+    \item Можно учитывать локальные метрики (RTT, latency, errors)
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Reverse proxy как балансировщик}
+  \begin{itemize}
+    \item Проксирует HTTP-трафик к backend-сервисам
+    \item Делает:
+    \begin{itemize}
+      \item TLS termination
+      \item rate limiting
+      \item routing по пути, хедерам, метаданным
+      \item кэширование ответов
+    \end{itemize}
+    \item Примеры: Nginx, Envoy, HAProxy, Traefik
+    \item Фактически стандарт для L7 балансировки
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Алгоритмы распределения нагрузки}
+  \begin{itemize}
+    \item \textbf{Round Robin} — по очереди
+    \item \textbf{Weighted Round Robin} — учитывает разные мощности узлов
+    \item \textbf{Least Connections} — выбирает узел с наименьшим числом активных соединений
+    \item \textbf{Least Response Time} — выбор по задержке
+    \item \textbf{IP Hash} — полезно для session stickiness
+    \item \textbf{Consistent Hashing} — шардирование и sticky routing без перебалансировки
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Health Checks}
+  \begin{itemize}
+    \item LB регулярно проверяет состояние серверов
+    \begin{itemize}
+      \item HTTP/HTTPS: статус-коды 200–399
+      \item TCP: успешное установление соединения
+      \item gRPC: проверка служебного метода (gRPC Health API)
+    \end{itemize}
+    \item Отключает «больные» узлы от трафика
+    \item Позволяет выполнять rolling updates без даунтайма
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Паттерны балансировки}
+  \begin{itemize}
+    \item Blue–Green Deployment
+    \item Окружения: testing + shadow + canary (1\%) + production (99\%)
+    \item Hedging, Circuit Breakers, Rate Limiters, Throttlers...
+    \item Sticky Sessions / Session Affinity
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Антипаттерны}
+  \begin{itemize}
+    \item Sticky sessions без необходимости
+    \item Один балансировщик → SPOF (single point of failure)
+    \item Игнорирование health checks (service discovery)
+    \item DNS балансировка без контроля TTL
+    \item L7 балансировка для тяжёлого бинарного трафика (неэффективно)
+  \end{itemize}
+\end{frame}
+
+\section{Кэширование}
+
+\begin{frame}
+  \frametitle{Мотивация}
+  \begin{itemize}
+    \item Снижение нагрузки на базу данных и серверы
+    \item Ускорение отклика пользователю
+    \item Позволяет масштабировать систему без дорогих ресурсов
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Основные стратегии кэширования}
+
+   \begin{center}
+    \includegraphics[width=0.57\linewidth,keepaspectratio]{images/cache_strategies.png}
+  \end{center}
+
+\end{frame}
+
+\begin{frame}
+  \frametitle{Как выбирать стратегию кэширования}
+  \begin{itemize}
+    \item Преобладают чтения → Cache-Aside или Read-Through
+    \item Преобладают записи → Write-Around или Write-Behind
+    \item Нужна строгая консистентность → Write-Through
+    \item Данные редко меняются → долгий TTL + Cache-Aside
+    \item Высокая цена ошибки → избегать Write-Behind
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Фреймворк для размышления о компоненте системы}
+  \begin{itemize}
+    \item Внешний входной запрос (external input)
+    \item Внутренний входной запрос (internal input)
+    \item Внутренний выходной запрос (internal output)
+    \item Внешний выходной запрос (external output)
+    \item \textbf{Вопрос:} что из этого ключ кэша, а что значение кэша?
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Стратегии инвалидации}
+  \begin{itemize}
+    \item TTL (time-to-live) — автоматическое устаревание данных
+    \item Write-through invalidation — обновление кэша при записи
+    \item Delete-on-write — удаление из кэша при изменении данных
+    \item Periodic cache refresh — регулярное обновление по cron
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Подходы к реализации кэша}
+  \begin{itemize}
+    \item В памяти приложения (in-process cache): LRU (least recently used), ARC (adaptive replacement cache)
+    \item Внешний кэш: Redis, Memcached
+    \item Распределённый кэш: Redis Cluster, Hazelcast, Ignite, YTsaurus
+    \item CDN-кэширование для статического контента
+    \item Database-level caching: buffer pool, query cache
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Антипаттерны кэширования}
+  \begin{itemize}
+    \item Кэширование всего подряд (cache pollution)
+    \item Слишком большой TTL → stale data
+    \item Слишком маленький TTL → низкая эффективность
+    \item Отсутствие политики инвалидации
+    \item Сложная логика кэширования внутри бизнес-кода
+  \end{itemize}
+\end{frame}
+
+\section{Демо: Nginx}
+
+\begin{frame}
+  \frametitle{NGINX как балансировщик нагрузки}
+  \begin{itemize}
+    \item Легковесный и быстрый reverse-proxy
+    \item Поддерживает L4 и L7 балансировку
+    \item Позволяет гибко управлять трафиком: round-robin, least connections (fair-подход), IP hash
+    \item Идеален для демонстрации распределения нагрузки
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[fragile]
+  \frametitle{Базовая конфигурация NGINX}
+  \begin{itemize}
+    \item Конфигурационный файл: \texttt{/etc/nginx/nginx.conf} или \texttt{/etc/nginx/conf.d/*.conf}
+    \item Основные блоки конфигурации:
+    \begin{itemize}
+      \item \texttt{upstream} — пул backend-серверов
+      \item \texttt{server} — настройки виртуального хоста
+      \item \texttt{location} — маршрутизация
+    \end{itemize}
+    \item Проверка конфигурации:
+\begin{verbatim}
+nginx -t
+\end{verbatim}
+    \item Перезапуск:
+\begin{verbatim}
+nginx -s reload
+\end{verbatim}
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[fragile]
+  \frametitle{Round-robin балансировка в NGINX}
+  \begin{itemize}
+    \item Простой и наиболее распространённый метод
+    \item Запросы равномерно распределяются по backend-серверам
+  \end{itemize}
+
+\begin{center}
+\begin{minipage}{0.85\linewidth}
+\begin{verbatim}
+upstream backend {
+    server web1:5000;
+    server web2:5000;
+    server web3:5000;
+}
+
+server {
+    listen 80;
+    location / {
+        proxy_pass http://backend;
+    }
+}
+\end{verbatim}
+\end{minipage}
+\end{center}
+
+\end{frame}
+
+\begin{frame}[fragile]
+  \frametitle{Least connections \& IP Hash}
+\begin{center}
+\begin{minipage}{0.85\linewidth}
+\begin{verbatim}
+upstream backend1 {
+    least_conn;
+    server web1:5000;
+    server web2:5000;
+    server web3:5000;
+}
+
+upstream backend2 {
+    ip_hash;
+    server web1:5000;
+    server web2:5000;
+    server web3:5000;
+}
+\end{verbatim}
+\end{minipage}
+\end{center}
+
+\end{frame}
+
+\begin{frame}[fragile]
+  \frametitle{Примеры конфигураций}
+\begin{center}
+\begin{minipage}{0.85\linewidth}
+\begin{verbatim}
+error_page  404  /404.html;
+
+location = /404.html {
+  root  /spool/www;
+}
+
+location /old_stuff/ {
+  rewrite   ^/old_stuff/(.*)$  /new_stuff/$1  permanent;
+}
+
+\end{verbatim}
+\end{minipage}
+\end{center}
+
+\end{frame}
+
+\begin{frame}[fragile]
+  \frametitle{Примеры конфигураций}
+\begin{center}
+\begin{minipage}{0.85\linewidth}
+\begin{verbatim}
+location / {
+  proxy_pass         http://127.0.0.1/;
+  proxy_redirect     off;
+
+  proxy_set_header   Host             $host;
+  proxy_set_header   X-Real-IP        $remote_addr;
+  #proxy_set_header  X-Forwarded-For  $proxy_add_x_forwarded_for;
+
+  client_max_body_size       10m;
+  client_body_buffer_size    128k;
+
+  proxy_connect_timeout      70;
+  proxy_send_timeout         90;
+  proxy_read_timeout         90;
+
+  charset  koi8-r;
+}
+
+\end{verbatim}
+\end{minipage}
+\end{center}
+
+\end{frame}
+
+% --- REDIS ---
+
+\section{Демо: Redis}
+
+\begin{frame}
+  \frametitle{Redis: основы}
+  \begin{itemize}
+    \item In-memory key-value хранилище
+    \item Идеален для кэшей, очередей, счётчиков
+    \item Поддерживает множество структур данных: strings, hash, list, set, sorted set
+    \item Master/slave – это значит, что Master - точка отказа!
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[fragile]
+  \frametitle{Основные команды Redis}
+  \begin{itemize}
+    \item Установка ключа:
+\begin{verbatim}
+SET user:1 "Alice"
+\end{verbatim}
+    \item Чтение:
+\begin{verbatim}
+GET user:1
+\end{verbatim}
+    \item Истечение (TTL):
+\begin{verbatim}
+SET session:123 ABC EX 60
+TTL session:123
+\end{verbatim}
+    \item Удаление:
+\begin{verbatim}
+DEL user:1
+\end{verbatim}
+    \item Проверка наличия:
+\begin{verbatim}
+EXISTS user:1
+\end{verbatim}
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[fragile]
+  \frametitle{Cache-Aside (Lazy Loading)}
+  \begin{itemize}
+    \item Приложение проверяет кэш → если miss → читает из БД и кладёт в Redis
+    \item Самый популярный паттерн
+  \end{itemize}
+
+\begin{center}
+\begin{minipage}{0.8\linewidth}
+\begin{verbatim}
+value = redis.get(key)
+if value is None:
+    value = db.query(key)
+    redis.set(key, value)
+return value
+\end{verbatim}
+\end{minipage}
+\end{center}
+
+\end{frame}
+
+\begin{frame}[fragile]
+  \frametitle{Команды Redis для демонстрации}
+  \begin{itemize}
+    \item Подключиться:
+\begin{verbatim}
+redis-cli
+\end{verbatim}
+    \item Протестировать скорость GET:
+\begin{verbatim}
+redis-benchmark -t get -n 10000
+\end{verbatim}
+    \item Получить все ключи:
+\begin{verbatim}
+KEYS *
+\end{verbatim}
+    \item Посмотреть статистику:
+\begin{verbatim}
+INFO
+\end{verbatim}
+    \item Удалить кэш:
+\begin{verbatim}
+FLUSHALL
+\end{verbatim}
+  \end{itemize}
+\end{frame}
+
+\section{Итоги}
+\begin{frame}
+  \frametitle{Итоги}
+  \begin{itemize}
+    \item Рассмотрели практические аспекты масштабирования, балансировки и кэширования
+    \item Посмотрели демо с NGINX и Redis
+    \item Выдано второе домашнее задание
+  \end{itemize}
+\end{frame}
+
+\end{document}
