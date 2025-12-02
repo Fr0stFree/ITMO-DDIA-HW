@@ -427,7 +427,46 @@ EVAL "return 'Hello World'" 0
 \end{problem}
 
 \begin{solution}
+	\begin{minted}{lua}
+		-- Сохранение пути файла в кеш с TTL
+		local key = ARGV[1]
+		local ttl = ARGV[2]
+		local filePath = ARGV[3]
 
+		redis.call("SET", key, filePath)
+		redis.call("EXPIRE", key, ttl)
+
+		return "OK"
+	\end{minted}
+	\begin{minted}{lua}
+		-- Получение пути файла из кеша
+		local key = ARGV[1]
+
+		local value = redis.call("GET", key)
+		return value
+	\end{minted}
+	\begin{minted}{lua}
+		-- Rate limiter
+		-- Использование: EVAL {...script} 0 user_id limit time_window
+		local rateLimiterKey = "rate:" .. ARGV[1]
+		local limit = tonumber(ARGV[2])
+		local timeWindow = tonumber(ARGV[3])
+
+		local requestsAmount = redis.call("INCR", rateLimiterKey)
+
+		if requestsAmount == 1 then
+			redis.call("EXPIRE", rateLimiterKey, timeWindow)
+		end
+
+		local shouldDeny = requestsAmount > limit
+		if shouldDeny then
+			return "DENY"
+		else
+			return "OK"
+		end
+
+
+	\end{minted}
 \end{solution}
  
 \end{document}
