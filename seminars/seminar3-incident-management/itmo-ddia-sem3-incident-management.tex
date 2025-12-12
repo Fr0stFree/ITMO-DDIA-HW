@@ -1,0 +1,388 @@
+\documentclass{beamer}
+\usetheme{Madrid}
+\usepackage{minted}
+% sudo tlmgr install minted
+\usepackage[utf8]{inputenc}
+\usepackage[T2A]{fontenc}
+\usepackage[russian,english]{babel}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, positioning}
+
+% Footline: show current section (left) and frame numbers (right)
+\setbeamertemplate{footline}{%
+  \leavevmode%
+  \hbox{%
+    \begin{beamercolorbox}[wd=.78\paperwidth,ht=2.5ex,dp=1ex,left]{author in head/foot}%
+      \hspace*{1em}\usebeamerfont{footline}\insertsectionhead%
+    \end{beamercolorbox}%
+    \begin{beamercolorbox}[wd=.22\paperwidth,ht=2.5ex,dp=1ex,right]{date in head/foot}%
+      \usebeamerfont{footline}\insertframenumber{} / \inserttotalframenumber\hspace*{1em}%
+    \end{beamercolorbox}%
+  }%
+}
+
+\newcommand{\parpause}[1]{\only<+->{#1\par}}
+
+\AtBeginSection[]
+{
+  \begin{frame}
+    \frametitle{Содержание}
+    \tableofcontents[currentsection]
+  \end{frame}
+}
+\title{Семинар 3. Устойчивость и управление инцидентами}
+\subtitle{Принципы построения высоконагруженных систем}
+\author{Георгий Семенов}
+\institute{Институт прикладных компьютерных наук \\ Университет ИТМО}
+\date{осень 2025}
+
+\begin{document}
+
+\frame{\titlepage}
+
+\section{Введение}
+
+\begin{frame}
+  \frametitle{Оставшиеся активности и домашние задания}
+  \begin{itemize}
+    \item Лекция + Семинар 4: Очереди, собьтия и т.п.
+    \item Домашнее задание 3: запрограммировать стратегии устойчивости
+    \item Домашнее задание 4: небольшая курсовая работа с устной защитой
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Вспоминаем лекцию}
+  \begin{itemize}
+    \item SRE: SLA/SLO/SLI; расчет совокупного SLA
+    \item Active-passive redundancy (failover): cold, warm, hot
+    \item Active-active redundancy: load balancing, capacity planning
+    \item Geographic redundancy
+    \item Liveness probe, readiness probe
+    \item Graceful degradation
+    \item Circuit breaker
+    \item Retry patterns (идемпотентность): retry, exponential backoff, jitter
+    \item Bulkhead (изоляция ресурсов)
+    \item Rate limiting (+ backpressure) - leaky bucket, token bucket, fixed/sliding window
+  \end{itemize}
+\end{frame}
+
+\section{Стратегии устойчивости (resilience)}
+
+\begin{frame}
+  \frametitle{Каскадные сбои}
+
+  Каскадные отказы – те, что распространяются с течением времени в результате
+  положительной обратной связи\footnote{SRE Book. Глава 22 - Справляемся с каскадными сбоями}.
+
+  \begin{itemize}
+    \item Каскадный – т.е. прорывающийся вглубь через границы между компонентами системы
+    \item Перегруженность сервера: приняли, подупали, поретраили, и сами себя заDDoS-или
+    \item Истощение CPU: переполнение очередей, зависание потоков, троттлинг (\texttt{>100\%})
+    \item Истощение RAM: падающие поды, <<спираль смерти GC>>, снижение частоты попадания кэша
+    \item и т.д.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Нейрологическая метафора}
+
+  Серотониновый шторм в синаптических щелях между нейронами:
+  \begin{itemize}
+    \item Должен быть <<тонус>>
+    \item Переполнение приводит к плавной деградации (или нет – тогда шторм) 
+  \end{itemize}
+
+  \begin{center}
+    \includegraphics[width=0.6\linewidth,keepaspectratio]{images/synaptic.png}
+  \end{center}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Как предотвращать каскадные сбои?}
+
+  \begin{itemize}
+    \item Предварительно нагрузочно тестировать
+    \item Graceful degradation: уметь отправлять деградированные результаты
+    \item Rate limiting + backpressure
+    \item Планирование производительности
+    \item Управление очередями (thread pool -> concurrency, aka go, userver и т.п.)
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Как мгновенно реагировать на каскадные сбои?}
+
+  \begin{itemize}
+    \item Увеличить количество ресурсов
+    \item Прекратить выполнять проверки на сбои/<<гибель>>
+    \item Перезапускать серверы
+    \item Отбрасывать трафик (в т.ч. <<плохой>>)
+    \item Автоматические/ручные деградации
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Проблема холодного старта}
+
+  \begin{itemize}
+    \item Холодный кэш
+    \item Холодный JIT (например, для Java)
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Retries: модель ответов в HTTP}
+
+  \begin{itemize}
+    \item \textbf{2xx} – успешный ответ с полезной нагрузкой в теле ответа.
+    \item \textbf{4xx} – ошибка со стороны клиента (некорректный запрос, ошибка аутентификации или авторизации и т.п.).
+    \item \textbf{5xx} – внутренняя ошибка сервера.
+    \item \textbf{Timeout} – клиентский таймаут ожидания ответа от сервера на текущий запрос.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Retries: типы бюджетов}
+
+  \begin{itemize}
+    \item \textbf{Retry budget} – максимальное количество подзапросов, которым мы можем нагрузить сервер за один запрос, в частности:
+    \begin{itemize}
+      \item \textbf{Fast errors budget} – <<быстрые>> ошибки на подзапросах, т.е. с быстрым временем отказа (обычно \texttt{4xx}).
+      \item \textbf{Failures budget} – <<тяжелые>> ошибки, т.е. с некоторым ожидаемым временем работы до падения подзапроса (обычно \texttt{5xx}).
+      \item \textbf{Timeout budget} – ошибки типа <<timeout>>, т.е. когда подзапрос завершается из-за истечения клиентского таймаута.
+    \end{itemize}
+    \item \textbf{Latency budget} – общее время ожидания ответа от сервера на все попытки выполнения запроса.
+    \begin{itemize}
+      \item в частности – \textbf{Subrequest latency budget} – время ожидания одного подзапроса.
+    \end{itemize}
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Немного про ТМО}
+
+  \begin{itemize}
+    \item Теория массового обслуживания - раздел математики
+    \item Центральный пример - распределение Пуассона (в ДЦ каждый день меняют по три диска)
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Хеджирование}
+  \href{https://grpc.io/docs/guides/request-hedging/}{Хеджирование} – спекулятивная повторная отправка дополнительных запросов с целью
+  минимизировать время ответа на запрос.
+
+  \begin{itemize}
+    \item Первый подзапрос должен отправляться на первый по порядку \textit{интерфейс отправки подзапроса} из их списка.
+    \item Если в течение параметризуемого времени \texttt{hedging\_delay} не приходит ответ на первый подзапрос, 
+    следующие подзапросы должны параллельно отправляться на оставшиеся \textit{интерфейсы отправки подзапроса}.
+    \item Стратегия завершается успешно, когда приходит первый успешный ответ от любого из подзапросов.
+    \item Стратегия завершается ошибкой, когда все попытки завершились или исчерпан бюджет на latency запроса.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Хеджирование: case 1}
+  
+   \begin{center}
+    \includegraphics[width=0.9\linewidth,keepaspectratio]{images/hedging1.png}
+  \end{center}
+
+\end{frame}
+
+\begin{frame}
+  \frametitle{Хеджирование: case 2}
+  
+   \begin{center}
+    \includegraphics[width=0.9\linewidth,keepaspectratio]{images/hedging2.png}
+  \end{center}
+
+\end{frame}
+
+\section{Управление инцидентами}
+
+
+  \begin{frame}
+    \frametitle{Инцидент - спекулятивное определение}
+
+    \begin{itemize}
+      \item В 3 ночи поднимаются лиды и разработчики
+      \item Дружно каскадно перезапускают упавшие сервисы, пока утром не польется активный трафик
+      \item Сидят в зуме и интересуются, как кого что импактит внутри
+    \end{itemize}
+  \end{frame}
+
+  \begin{frame}
+    \frametitle{Кто такая дежурная смена?}
+
+    \begin{itemize}
+      \item Существуют линии поддержки - Support Lines:
+      \item SL1 - поддержка пользователей (принимает сообщения об отказах)
+      \item SL2 - дежурная смена (24 на 7) + алертинг + мониторинг (подтверждает идентификацию и эскалацию инцидентов)
+      \item SL3 - ответственные команды и разработчики
+    \end{itemize}
+  \end{frame}
+
+  \begin{frame}
+    \frametitle{Эскалация - глоссарий}
+
+    \begin{itemize}
+      \item Вызванивать
+      \item Будить
+      \item Подключаться
+      \item Влияние
+      \item Подскажите, какой сейчас статус
+    \end{itemize}
+  \end{frame}
+ 
+  \begin{frame}
+    \frametitle{Авиа- метафора}
+
+    Человек должен <<успевать>> за системой:
+    \begin{itemize}
+      \item Интерпретируемость автоматического реагирования системы на отказы
+      \item Адекватность архитектуры и ее мониторинга
+      \item Искусство координации инцидентным звонком
+    \end{itemize}
+
+    \begin{center}
+      \includegraphics[width=0.75\linewidth,keepaspectratio]{images/emergency.png}
+    \end{center}
+  \end{frame}
+
+  \begin{frame}
+    \frametitle{Post mortem}
+
+    \begin{itemize}
+      \item Инцидент - это срабатывание риска, связанное с упущенной прибылью
+      \item Цель реагирования – как можно скорее \textbf{устранить влияние}
+      \item Цель разбора – \textbf{установить причину} инцидента, чтобы устранить ее
+      \item Разбор не должен обвинять никого, он должен быть нейтральный
+    \end{itemize}
+
+  \end{frame}
+
+    \begin{frame}
+    \frametitle{Как разбирать инцидент?}
+
+    Проблемные вопросы:
+    \begin{itemize}
+      \item Что случилось? (и как долго?)
+      \item Как (кто?) заметил? (благодаря случайности или процессу?)
+      \item Какие были warning sings?
+      \item Как можно оценить влияние?
+      \item Какие action items можно выделить для устранения причин (предотвращения в будущем)?
+      \item Что в итоге сделали?
+    \end{itemize}
+
+  \end{frame}
+
+\section{Инциденты: case-study}
+
+  \begin{frame}
+    \frametitle{IRL: обновление DNS в пятницу вечером}
+
+    \begin{itemize}
+      \item Пятница вечер, 22:00 – с подов сервиса пропадает доступ (обнаруживается через
+      мониторинг сервиса) к двум из трех балансировщиков СУБД
+      \item Трафик на оставшийся кластер возрос в $3$ раза
+      \item Выясняется, что в это время обновили конфигурацию DNS (добавили ipv6 AAAA-записи)
+      \item Вопрос 1: почему это помешало работе системы?
+      \item Вопрос 2: какую можно установить причину для инцидента?
+      % нарушение регламента работ
+    \end{itemize}
+
+  \end{frame}
+
+  \begin{frame}
+    \frametitle{BGP routing issue 2021 (6 часов)}
+
+     \begin{center}
+      \includegraphics[width=1.0\linewidth,keepaspectratio]{images/bgp.png}
+    \end{center}
+
+  \end{frame}
+
+  \begin{frame}
+    \frametitle{AWS S3 Outage 2017 (4 часа)}
+
+    \begin{itemize}
+      \item February 28, 2017, from mid-morning to early afternoon PST (around 9:40 AM to 12:36 PM PST)
+      \item Location: Primarily the US-East-1 (N. Virginia) region, the primary AWS region.
+      \item Cause: An authorized S3 team member executed a command with an incorrect input while trying to debug a slow billing system, inadvertently removing more servers than intended, affecting crucial S3 subsystems.
+      \item An authorized S3 team member executed a command with an incorrect input while trying to debug a slow billing system, inadvertently removing more servers than intended, affecting crucial S3 subsystems.
+    \end{itemize}
+
+  \end{frame}
+
+  \begin{frame}
+    \frametitle{CloudFlare Outage 2019 (27 мин)}
+
+    \begin{center}
+      \includegraphics[width=1.0\linewidth,keepaspectratio]{images/cloudflare.png}
+    \end{center}
+
+  \end{frame}
+
+\section{Как проектировать высоконагруженные системы?}
+
+  \begin{frame}
+    \frametitle{Архитектура}
+
+    Набор компонентов и связей между ними (но не только); набор решений, необходимых для разработки системы:
+
+    \begin{itemize}
+      \item Системная архитектура - какие сервисы, как расположены, как общаются
+      \item Программная архитектура – парадигма программирования, модульная организация, паттерны и т.п.
+      \item Архитектура данных – какие данные, схема хранения, СУБД и т.п.
+    \end{itemize}
+
+  \end{frame}
+
+  \begin{frame}
+    \frametitle{Диаграмма развертывания}
+
+    Можно нарисовать в Visual Paradigm Online.
+
+    \begin{center}
+      \includegraphics[width=0.9\linewidth,keepaspectratio]{images/deployment-diagram.png}
+    \end{center}
+
+  \end{frame}
+
+  \begin{frame}
+    \frametitle{Dataflow diagram}
+
+    Можно нарисовать в Visual Paradigm Online.
+
+    \begin{center}
+      \includegraphics[width=0.9\linewidth,keepaspectratio]{images/dataflow-diagram.png}
+    \end{center}
+
+  \end{frame}
+
+  \begin{frame}
+    \frametitle{Как пройти процесс проектирования?}
+
+    \begin{itemize}
+      \item Итеративный подход – задаем себе вопросы по кругу, пока не успокоимся
+      \item Не является ли компонент X единой точкой отказа? Как это исправить? – Исправляем.
+      \item Моделируем ситуации отказа сразу же при проектировании – отказ сервиса, сетевой разрыв,
+      заполнение СУБД, DDoS и т.п. – моделируем инцидент, исправляем первопричины
+    \end{itemize}
+
+  \end{frame}
+
+\section{Итоги}
+
+\begin{frame}
+  \frametitle{Итоги}
+  \begin{itemize}
+    \item Обсудили паттерны устойчивости и каскадные сбои
+    \item Погрузились в аспекты IM
+    \item Выдано третье + четвертое домашнее задание
+  \end{itemize}
+\end{frame}
+
+\end{document}
